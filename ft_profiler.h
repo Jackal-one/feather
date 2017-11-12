@@ -34,9 +34,6 @@ extern void ft_close_profiler();
 #include <stdlib.h>
 #include <stdio.h>
 
-const uint32_t k_max_timestamps = (k_num_block_bytes - sizeof(atomic_uint)) / sizeof(uint64_t);
-const uint32_t k_max_flip = 2u;
-
 struct ft_profiler_t {
   uint8_t* mem_arena;
   atomic_uint buffer_write_index;
@@ -51,10 +48,13 @@ struct ft_data_block_t {
   uint64_t* data;
 };
 
+const uint32_t k_max_timestamps = (k_num_block_bytes - sizeof(struct ft_data_block_t)) / sizeof(uint64_t);
+const uint32_t k_max_flip = 2u;
+
 static struct ft_profiler_t* g_profiler;
 
 uint64_t ft_pack_timestamp(uint16_t token, uint32_t timestamp, uint8_t type) {
-  return 77ull;
+  return timestamp;
 }
 
 void ft_put_timestamp(struct ft_timeline_t* timeline, uint16_t token, uint32_t timestamp, uint8_t type) {
@@ -84,9 +84,12 @@ void ft_flush_data() {
     struct ft_data_block_t* block = (struct ft_data_block_t*)&read_buffer[index * k_num_block_bytes];
     const uint32_t num_used = atomic_load_explicit(&block->num_used, memory_order_acquire);
 
+    const uint32_t start = num_used > k_max_timestamps ? (num_used % k_max_timestamps) : 0u;
+    const uint32_t num_ts = num_used > k_max_timestamps ? k_max_timestamps : num_used;
+
     // debug
-    for (uint32_t tid=0u; tid<num_used; ++tid) {
-      printf("ts: %llu\n", block->data[tid]);
+    for (uint32_t tid=0u; tid<num_ts; ++tid) {
+      printf("ts: %llu\n", block->data[(start+tid) % k_max_timestamps]);
     }
   }
 }
@@ -108,7 +111,7 @@ struct ft_profiler_i* ft_open_profiler(uint32_t num_blocks) {
 
   for (uint32_t index=0u; index<2u*num_blocks*k_num_block_bytes; index+=k_num_block_bytes) {
     struct ft_data_block_t* block = (struct ft_data_block_t*)&g_profiler->mem_arena[index];
-    block->data = (uint64_t*)&g_profiler->mem_arena[index] + sizeof(block->num_used);
+    block->data = (uint64_t*)(&block->data + 1u);
     block->num_used = 0u;
   }
 

@@ -1,35 +1,36 @@
 #include "ft_profiler.h"
+#include <functional>
 #include <thread>
 
+ft_profiler_i* profiler = NULL;
+
 int worker_fnc(void* args) {
-  for (uint32_t i=0u; i<32u; ++i) {
-    printf(".");
+  for (uint32_t i=0u; i<1245u; ++i) {
+    struct ft_timeline_t* t = (struct ft_timeline_t*)args;
+    profiler->put_timestamp(t, 0u, i, 0u);
   }
 
-  printf("\n done.\n");
   return 0;
 }
 
 int main() {
-
-  ft_profiler_i* profiler = ft_open_profiler(4u);
+  profiler = ft_open_profiler(4u);
   
   struct ft_timeline_t t0 = { .write_index = 0 };
   struct ft_timeline_t t1 = { .write_index = k_num_block_bytes };
   struct ft_timeline_t t2 = { .write_index = 2u*k_num_block_bytes };
 
-  profiler->put_timestamp(&t0, 0u, 44234234u, 0u);
-  profiler->put_timestamp(&t1, 0u, 64346356u, 0u);
-  profiler->put_timestamp(&t2, 0u, 23454359u, 0u);
+  std::thread workers[3u];
+  workers[0u] = std::thread([&] { worker_fnc(&t0); });
+  workers[1u] = std::thread([&] { worker_fnc(&t1); });
+  workers[2u] = std::thread([&] { worker_fnc(&t2); });
+
+  for (uint32_t i=0u; i<3u; ++i) {
+    workers[i].join();
+  }
 
   profiler->flush_data();
-
-/*
-  int32_t res;
-  thrd_t worker;
-  thrd_create(&worker, worker_fnc, NULL);
-  thrd_join(&worker_fnc, &res);
-*/
+  printf("done.\n");
 
   return 0;
 }
