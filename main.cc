@@ -5,27 +5,24 @@
 ft_profiler_i* profiler = NULL;
 
 int worker_fnc(void* args) {
+  profiler->begin_profile_thread("worker");
   for (uint32_t i=0u; i<1245u; ++i) {
-    struct ft_timeline_t* t = (struct ft_timeline_t*)args;
-    profiler->put_timestamp(t, 0u, i, 0u);
+    profiler->put_timestamp(0u, i, 0u);
   }
-
+  profiler->end_profile_thread();
   return 0;
 }
 
 int main() {
   profiler = ft_open_profiler(4u);
   
-  struct ft_timeline_t t0 = { .write_index = 0 };
-  struct ft_timeline_t t1 = { .write_index = k_num_block_bytes };
-  struct ft_timeline_t t2 = { .write_index = 2u*k_num_block_bytes };
+  const uint32_t k_max_threads = 4u;
+  std::thread workers[k_max_threads];
+  for (uint32_t i=0u; i<k_max_threads; ++i) {
+    workers[i] = std::thread([] { worker_fnc(NULL); });
+  }
 
-  std::thread workers[3u];
-  workers[0u] = std::thread([&] { worker_fnc(&t0); });
-  workers[1u] = std::thread([&] { worker_fnc(&t1); });
-  workers[2u] = std::thread([&] { worker_fnc(&t2); });
-
-  for (uint32_t i=0u; i<3u; ++i) {
+  for (uint32_t i=0u; i<k_max_threads; ++i) {
     workers[i].join();
   }
 
