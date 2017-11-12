@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.8)
 project(feather-example)
 
-set (CMAKE_CXX_STANDARD 11)
 add_definitions("-Wall -Werror")
-
-set(SOURCE ft_profiler.c)
-add_executable(${PROJECT_NAME} ${SOURCE})
+add_executable(${PROJECT_NAME} main.cc ft_profiler.c)
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    CXX_STANDARD 11
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO
+)
