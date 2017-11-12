@@ -27,7 +27,8 @@ int main() {
   }
 
   profiler->flush_data();
-  printf("done.\n");
+  ft_close_profiler();
 
+  printf("done.\n");
   return 0;
 }
