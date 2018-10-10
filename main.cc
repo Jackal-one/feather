@@ -14,6 +14,18 @@ int worker_fnc(void* args) {
   return 0;
 }
 
+void flush_data(const ft_thread_data_t* data) {
+  uint32_t start = data->start;
+  uint32_t count = data->count;
+  uint64_t* buffer = data->buffer;
+
+  static uint32_t i = 0u;
+  for (uint32_t tid=0u; tid<count; ++tid) {
+    const uint32_t index = (start+tid) % k_max_timestamps;
+    printf("t: %d, ts: %llu\n", i++, buffer[index]);
+  }
+}
+
 int main() {
   profiler = ft_open_profiler(4u);
   
@@ -27,7 +39,7 @@ int main() {
     workers[i].join();
   }
 
-  profiler->flush_data();
+  profiler->flush_data(flush_data);
   ft_close_profiler();
 
   printf("done.\n");

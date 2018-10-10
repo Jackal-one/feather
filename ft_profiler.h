@@ -5,11 +5,19 @@
 // todo: properly encode timestamps with metadata etc..
 // todo: write workbench stress application for test/feature.
 
+struct ft_thread_data_t {
+  uint64_t* buffer;
+  uint32_t start;
+  uint32_t count;
+};
+
+typedef void (*ft_callback)(const ft_thread_data_t* data);
+
 struct ft_profiler_i {
   void (*begin_profile_thread)(const char* name);
   void (*end_profile_thread)();
   void (*put_timestamp)(uint16_t meta, uint32_t timestamp, uint8_t type);
-  void (*flush_data)();
+  void (*flush_data)(ft_callback);
 };
 
 #ifdef __cplusplus
@@ -111,21 +119,20 @@ void ft_put_timestamp(uint16_t meta, uint32_t timestamp, uint8_t type) {
   ft_write_qword(timeline, ft_pack_timestamp(meta, timestamp, type));
 }
 
-void ft_flush_data() {
+void ft_flush_data(ft_callback flush_data) {
   std::lock_guard<std::mutex> lock(g_profiler->flush_lock);
 
   for (uint32_t i=0u; i<g_profiler->num_blocks_used; ++i) {
     const ft_timeline_t* timeline = &g_profiler->timeline_pool[i];
     const uint32_t num_used = timeline->num_used.load(std::memory_order_acquire);
-    const uint32_t start = num_used > k_max_timestamps ? (num_used % k_max_timestamps) : 0u;
-    const uint32_t count = num_used > k_max_timestamps ? k_max_timestamps : num_used;
 
-    // debug
-    for (uint32_t tid=0u; tid<count; ++tid) {
-      const uint32_t index = (start+tid) % k_max_timestamps;
-      const uint64_t* buffer = (uint64_t*)&g_profiler->mem_arena[timeline->buffer_address];
-      printf("t: %d, ts: %llu\n", i, buffer[index]);
-    }
+    ft_thread_data_t td = {
+      .buffer = (uint64_t*)&g_profiler->mem_arena[timeline->buffer_address],
+      .start = num_used > k_max_timestamps ? (num_used % k_max_timestamps) : 0u,
+      .count =  num_used > k_max_timestamps ? k_max_timestamps : num_used,
+    };
+
+    flush_data(&td);
   }
 
   for (uint32_t i=0u; i<k_max_threads; ++i) {
