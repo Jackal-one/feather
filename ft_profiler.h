@@ -10,6 +10,12 @@ const uint32_t k_max_name_len = 32u;
 const uint32_t k_max_tokens = 1024u;
 const uint32_t k_max_threads = 16u;
 
+#define FT_TOKEN_PASTE(a, b) a ## b
+#define FT_TOKEN_PASTE_EX(a, b) FT_TOKEN_PASTE(a, b)
+#define FT_SCOPE(group, name) \
+  static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
+  ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(FT_TOKEN_PASTE_EX(s_token, __LINE__))
+
 struct ft_profile_data_t {
   struct ft_thread_data_t {
     uint32_t start;
@@ -250,7 +256,7 @@ void ft_data_read(const ft_profile_data_t* data, const uint32_t thread_index,
 
   *ts = (qword & k_mask_value);
   *type = (qword >> (k_bits_value + k_bits_meta)) & k_mask_type;
-  *name = &g_profiler->tokens_meta.names[meta_index];
+  *name = &g_profiler->tokens_meta.names[meta_index * k_max_name_len];
 }
 
 void ft_flush_data(ft_callback flush_data, void* user_data) {

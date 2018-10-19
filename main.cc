@@ -11,12 +11,6 @@
 // todo(mgiacal):
 // - test constexpr thread safety.
 
-#define FT_TOKEN_PASTE(a, b) a ## b
-#define FT_TOKEN_PASTE_EX(a, b) FT_TOKEN_PASTE(a, b)
-#define FT_SCOPE(group, name) \
-  static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
-  ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(FT_TOKEN_PASTE_EX(s_token, __LINE__))
-
 ft_profiler_i* profiler = nullptr;
 
 int worker_fnc(void* args) {
@@ -78,11 +72,11 @@ void json_trace_save_to_file(const ft_profile_data_t* data, void* user_data) {
       const char* thread_name = &data->thread_names[tid * k_max_name_len];
       const bool is_last_item = (tid == (data->num_threads - 1u));
 
-      output_file << "\t{\"name\": \"thread_name\", \"ph\": \"M\", ";
+      output_file << "\t{ \"name\": \"thread_name\", \"ph\": \"M\", ";
       output_file << "\"pid\": " << 0u << ", ";
       output_file << "\"tid\": " << tid << ", ";
       output_file << "\"args\": { \"name\" : \"" << thread_name <<  "\"}";
-      output_file << (is_last_item ? "}" : "},") << std::endl;
+      output_file << (is_last_item ? " }" : " },") << std::endl;
     }
 
     output_file << " ]" << std::endl;
@@ -92,6 +86,7 @@ void json_trace_save_to_file(const ft_profile_data_t* data, void* user_data) {
 
 int main() {
   profiler = ft_open_profiler(4u);
+  //profiler->begin_profile_thread("main");
   
   const uint32_t k_max_threads = 4u;
   std::thread workers[k_max_threads];
@@ -108,7 +103,7 @@ int main() {
     workers[i].join();
   }
 
-  profiler->flush_data(flush_data, nullptr);
+  profiler->end_profile_thread();
   ft_close_profiler();
 
   printf("done.\n");
