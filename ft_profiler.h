@@ -179,8 +179,7 @@ void ft_release_index(const uint32_t index) {
 void ft_reset_timeline(const uint32_t index) {
   ft_timeline_t* tl = &g_profiler->timeline_pool[index];
   tl->num_used = 0u;
-  tl->buffer_address = -1;
-  tl->thread_hash = -1;
+  tl->thread_hash = 0u;
   tl->flags_release = 0u;
 }
 
