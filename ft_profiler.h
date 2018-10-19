@@ -21,13 +21,12 @@ struct ft_profile_data_t {
     uint32_t start;
     uint32_t count;
     uint64_t* buffer;
-    uint32_t* meta_index;
   };
 
+  ft_thread_data_t thread_data[k_max_threads];
   const char* token_names;
   const char* thread_names;
   uint32_t num_threads;
-  ft_thread_data_t thread_data[k_max_threads];
 };
 
 typedef void (*ft_callback)(const ft_profile_data_t* data, void* user_data);
@@ -73,7 +72,7 @@ struct ft_scope_t {
 #include <atomic>
 #include <mutex>
 
-const uint32_t k_num_block_bytes = 64u * 1024u;
+const uint32_t k_num_block_bytes = 32u * 1024u;
 const uint32_t k_max_timeline_bitmasks = k_max_threads / sizeof(uint32_t);
 const uint32_t k_max_timestamps = k_num_block_bytes / sizeof(uint64_t);
 
@@ -99,9 +98,6 @@ struct ft_timeline_t {
 
 struct ft_profiler_t {
   uint8_t* mem_arena;
-
-  uint32_t num_blocks_allocated;
-  uint32_t num_blocks_used;
 
   ft_token_meta_t tokens_meta;
   ft_timeline_t timeline_pool[k_max_threads];
@@ -210,7 +206,6 @@ void ft_request_thread_timeline(const char* name) {
       g_tls_timeline = &g_profiler->timeline_pool[free_index];
       g_tls_timeline->thread_hash = thread_hash;
       ft_util_meta_strcpy(free_index, g_profiler->tokens_meta.thread_names, name ? name : "unknown");
-      g_profiler->num_blocks_used++;
     }
   }
 }
@@ -263,16 +258,20 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
   std::lock_guard<std::mutex> lock(g_profiler->lock);
   g_profiler->profile_data.num_threads = 0u;
 
-  for (uint32_t i=0u; i<g_profiler->num_blocks_used; ++i) {
+  for (uint32_t i=0u; i<k_max_threads; ++i) {
     const ft_timeline_t* timeline = &g_profiler->timeline_pool[i];
-    const uint32_t num_used = timeline->num_used.load(std::memory_order_acquire);
 
-    if (num_used > 0u) {
+    if (timeline->thread_hash > 0u) {
+      const uint32_t num_used = timeline->num_used.load(std::memory_order_acquire);
       const uint32_t thread_index = g_profiler->profile_data.num_threads++;
+
+      const uint32_t k_read_offset = k_max_timestamps / 5u;
+      const uint32_t k_num_read = k_max_timestamps - k_read_offset;
+
       g_profiler->profile_data.thread_data[thread_index] = (ft_profile_data_t::ft_thread_data_t) {
         .buffer = (uint64_t*)&g_profiler->mem_arena[timeline->buffer_address],
-        .start = num_used > k_max_timestamps ? (num_used % k_max_timestamps) : 0u,
-        .count =  num_used > k_max_timestamps ? k_max_timestamps : num_used,
+        .start = num_used > k_max_timestamps ? ((num_used + k_read_offset) % k_max_timestamps) : 0u,
+        .count =  num_used > k_max_timestamps ? k_num_read : num_used,
       };
     }
   }
@@ -284,7 +283,6 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
     if (timeline->flags_release) {
       ft_release_index(i);
       ft_reset_timeline(i);
-      g_profiler->num_blocks_used--;
     }
   }
 }
@@ -300,8 +298,6 @@ ft_profiler_i* ft_open_profiler(uint32_t num_blocks) {
   g_profiler = &profiler_inst;
 
   g_profiler->mem_arena = (uint8_t*)malloc(num_blocks * k_num_block_bytes);
-  g_profiler->num_blocks_allocated = num_blocks;
-  g_profiler->num_blocks_used = 0u;
 
   memset(g_profiler->free_list, 0xff, sizeof(g_profiler->free_list));
   memset(g_profiler->timeline_pool, 0x0, sizeof(g_profiler->timeline_pool));
