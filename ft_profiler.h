@@ -69,6 +69,7 @@ struct ft_scope_t {
 #include <stdio.h>
 #include <cassert>
 #include <chrono>
+#include <thread>
 #include <atomic>
 #include <mutex>
 
@@ -215,6 +216,14 @@ void ft_release_thread_timeline() {
   g_tls_timeline = nullptr;
 }
 
+ft_timeline_t* ft_get_thread_timeline() {
+  if (!g_tls_timeline) {
+    ft_request_thread_timeline("unknown");
+  }
+
+  return g_tls_timeline;
+}
+
 uint64_t ft_pack_timestamp(uint32_t meta_index, uint64_t timestamp, uint8_t type) {
   return ((type & k_mask_type) << (k_bits_meta + k_bits_value)) | 
     ((meta_index & k_mask_meta) << k_bits_value) |
@@ -229,7 +238,7 @@ void ft_write_qword(ft_timeline_t* timeline, uint64_t data) {
 }
 
 void ft_put_timestamp(uint32_t meta_index, uint8_t type) {
-  ft_timeline_t* timeline = g_tls_timeline;
+  ft_timeline_t* timeline = ft_get_thread_timeline();
   const uint64_t ts = platform_tick();
   ft_write_qword(timeline, ft_pack_timestamp(meta_index, ts, type));
 }
