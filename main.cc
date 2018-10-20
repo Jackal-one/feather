@@ -7,25 +7,32 @@
 #include <fstream>
 #include <algorithm>
 #include <vector>
+#include <unistd.h>
 
-// todo(mgiacal):
+// todo(mgiacal):s
 // - test constexpr thread safety.
 
-ft_profiler_i* profiler = nullptr;
+FT_DEFINE(main_loop, "app", "main_loop", FT_TIMER);
+FT_DEFINE(json_write, "app", "json_write", FT_TIMER);
 
 int worker_fnc(void* args) {
   char name[64];
-  sprintf(name, "worker_%d", (uint32_t)args);
-  profiler->begin_profile_thread(name);
+  sprintf(name, "worker_%zu", (size_t)args);
+  ft_thread_scope tt(name);
 
   // for (uint32_t i=0u; i<1024u; ++i) {
   uint32_t i = 0u;
   while (1) {
-    FT_SCOPE("rendering", "job");
-    _sleep(100);
+    {
+      FT_SCOPE("rendering", "job");
+      usleep((rand() % 10000));
+    }
+    {
+      FT_SCOPE("rendering", "job2");
+      usleep((rand() % 10000));
+    }
   }
 
-  profiler->end_profile_thread();
   return 0;
 }
 
@@ -45,9 +52,10 @@ void flush_data(const ft_profile_data_t* data, void* user_data) {
 
 void json_trace_save_to_file(const ft_profile_data_t* data, void* user_data) {
   const char* path = (const char*)user_data;
-  std::ofstream output_file(path);
+  std::ofstream output_file(path, std::ofstream::out | std::ofstream::binary);
   if (output_file.is_open())
   {
+    FT_SCOPE_TOK(json_write);
     output_file << "[ " << std::endl;
 
     for (uint32_t tid=0u; tid<data->num_threads; tid++) {
@@ -80,13 +88,14 @@ void json_trace_save_to_file(const ft_profile_data_t* data, void* user_data) {
     }
 
     output_file << " ]" << std::endl;
+
     output_file.close();
   }
 }
 
 int main() {
-  profiler = ft_open_profiler(4u);
-  //profiler->begin_profile_thread("main");
+  ft_init_profiler(5u);
+  ft_instrument_thread("main");
   
   const uint32_t k_max_threads = 4u;
   std::thread workers[k_max_threads];
@@ -95,16 +104,17 @@ int main() {
   }
 
   while (1) {
-    _sleep(5000);
-    profiler->flush_data(json_trace_save_to_file, (void*)"trace.json");
+    {
+    FT_SCOPE_TOK(main_loop);
+    usleep(500000);}
+    ft_flush_data(json_trace_save_to_file, (void*)"trace.json");
   }
 
   for (uint32_t i=0u; i<k_max_threads; ++i) {
     workers[i].join();
   }
 
-  profiler->end_profile_thread();
-  ft_close_profiler();
+  ft_end_profiler();
 
   printf("done.\n");
   return 0;

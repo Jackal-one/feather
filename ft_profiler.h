@@ -34,39 +34,44 @@ struct ft_profile_data_t {
   uint32_t num_threads;
 };
 
-typedef void (*ft_callback)(const ft_profile_data_t* data, void* user_data);
-
-struct ft_profiler_i {
-  void (*begin_profile_thread)(const char* name);
-  void (*end_profile_thread)();
-  void (*flush_data)(ft_callback, void* user_data);
-};
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+extern void ft_init_profiler(uint32_t num_blocks);
+extern void ft_end_profiler();
+
+extern void ft_instrument_thread(const char* name);
+extern void ft_end_instrument_thread();
 
 extern uint64_t ft_make_token(const char* group, const char* name);
 extern void ft_scope_begin(const uint64_t token);
 extern void ft_scope_end(const uint64_t token);
 
+typedef void (*ft_callback)(const ft_profile_data_t* data, void* user_data);
+extern void ft_flush_data(ft_callback flush_data, void* user_data);
+
 extern void ft_data_read(const ft_profile_data_t* data, const uint32_t thread_index,
   const uint32_t index, char** name, uint64_t* ts, uint8_t* type);
 
-extern struct ft_profiler_i* ft_open_profiler(uint32_t num_blocks);
-extern void ft_close_profiler();
+#ifdef __cplusplus
+}
+#endif
 
 #ifdef __cplusplus
+
+struct ft_thread_scope {
+  ft_thread_scope(const char* name) { ft_instrument_thread(name); };
+  ~ft_thread_scope() { ft_end_instrument_thread(); }
+};
+
 struct ft_scope_t {
   ft_scope_t(const uint64_t t) : token(t) { ft_scope_begin(token); };
   ~ft_scope_t() { ft_scope_end(token); }
   uint64_t token;
 };
-#endif 
 
-#ifdef __cplusplus
-}
-#endif
+#endif 
 
 #ifdef FT_PROFILER_IMPL
 
@@ -209,7 +214,7 @@ bool ft_find_thread_timeline(const uint64_t thread_hash, uint32_t& index) {
   return false;
 }
 
-void ft_request_thread_timeline(const char* name) {
+void ft_instrument_thread(const char* name) {
   std::lock_guard<std::mutex> lock(ft_profiler()->lock);
   const size_t thread_hash = std::hash<std::thread::id>{}(std::this_thread::get_id());
   uint32_t tl_index = -1;
@@ -224,7 +229,7 @@ void ft_request_thread_timeline(const char* name) {
   }
 }
 
-void ft_release_thread_timeline() {
+void ft_end_instrument_thread() {
   std::lock_guard<std::mutex> lock(ft_profiler()->lock);
   g_tls_timeline->flags_release = 1u;
   g_tls_timeline = nullptr;
@@ -232,7 +237,7 @@ void ft_release_thread_timeline() {
 
 ft_timeline_t* ft_get_thread_timeline() {
   if (!g_tls_timeline) {
-    ft_request_thread_timeline("unknown");
+    ft_instrument_thread("unknown");
   }
 
   return g_tls_timeline;
@@ -313,13 +318,7 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
   }
 }
 
-static struct ft_profiler_i g_profiler_api = {
-  .begin_profile_thread = ft_request_thread_timeline,
-  .end_profile_thread = ft_release_thread_timeline,
-  .flush_data = ft_flush_data
-};
-
-ft_profiler_i* ft_open_profiler(uint32_t num_blocks) {
+void ft_init_profiler(uint32_t num_blocks) {
   ft_profiler()->mem_arena = (uint8_t*)malloc(num_blocks * k_num_block_bytes);
 
   memset(ft_profiler()->free_list, 0xff, sizeof(ft_profiler()->free_list));
@@ -332,12 +331,10 @@ ft_profiler_i* ft_open_profiler(uint32_t num_blocks) {
 
   for (uint32_t i=0u; i<k_max_threads; i++) {
     ft_profiler()->timeline_pool[i].buffer_address = i * k_num_block_bytes;
-  } 
-
-  return &g_profiler_api;
+  }
 }
 
-void ft_close_profiler() {
+void ft_end_profiler() {
   free(ft_profiler()->mem_arena);
 }
 
