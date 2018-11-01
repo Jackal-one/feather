@@ -13,6 +13,9 @@ const uint32_t k_max_threads = 16u;
 #define FT_TOKEN_PASTE(a, b) a ## b
 #define FT_TOKEN_PASTE_EX(a, b) FT_TOKEN_PASTE(a, b)
 #define FT_DEFINE(token, group, name) uint64_t ft_token_##token = ft_make_token(group, name)
+#define FT_EVENT_TOK(token) ft_scope_event(ft_token_##token)
+#define FT_EVENT(group, name) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
+  ft_scope_event(FT_TOKEN_PASTE_EX(s_token, __LINE__))
 #define FT_SCOPE_TOK(token) ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(ft_token_##token)
 #define FT_SCOPE(group, name) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
   ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(FT_TOKEN_PASTE_EX(s_token, __LINE__))
@@ -32,6 +35,7 @@ struct ft_profile_data_t {
 
 struct ft_platform_profiler_t {
   void (*scope_begin)(const char*, uint32_t);
+  void (*scope_event)(const char*, uint32_t);
   void (*scope_end)();
 };
 
@@ -49,6 +53,7 @@ extern void ft_end_instrument_thread();
 extern uint64_t ft_make_token(const char* group, const char* name);
 extern void ft_scope_begin(const uint64_t token);
 extern void ft_scope_end(const uint64_t token);
+extern void ft_scope_event(const uint64_t token);
 
 typedef void (*ft_callback)(const ft_profile_data_t* data, void* user_data);
 extern void ft_flush_data(ft_callback flush_data, void* user_data);
@@ -233,7 +238,7 @@ void ft_instrument_thread(const char* name) {
     if (ft_find_next_free_index(free_index)) {
       g_tls_timeline = &ft_profiler()->timeline_pool[free_index];
       g_tls_timeline->thread_hash = thread_hash;
-      ft_util_meta_strcpy(free_index, ft_profiler()->tokens_meta.thread_names, name ? name : "unknown");
+      ft_util_meta_strcpy(free_index, ft_profiler()->tokens_meta.thread_names, name);
     }
   }
 }
@@ -278,7 +283,7 @@ bool ft_use_platform_profiler() {
 void ft_scope_begin(const uint64_t token) {
   if (ft_use_platform_profiler()) {
     const char* name = &ft_profiler()->tokens_meta.names[token * k_max_name_len];
-    return ft_profiler()->platform_profiler->scope_begin(name, 0xFFFFFF);
+    return ft_profiler()->platform_profiler->scope_begin(name, token);
   }
 
   ft_put_timestamp(token, 0u);
@@ -290,6 +295,15 @@ void ft_scope_end(const uint64_t token) {
   }
 
   ft_put_timestamp(token, 1u);
+}
+
+void ft_scope_event(const uint64_t token) {
+  if (ft_use_platform_profiler()) {
+    const char* name = &ft_profiler()->tokens_meta.names[token * k_max_name_len];
+    return ft_profiler()->platform_profiler->scope_event(name, token);
+  }
+
+  ft_put_timestamp(token, 2u);  
 }
 
 void ft_data_read(const ft_profile_data_t* data, const uint32_t thread_index,
@@ -358,6 +372,7 @@ void ft_init_profiler_ex(uint32_t num_blocks, ft_platform_profiler_t* platform_p
   if (platform_profiler) {
     ft_profiler()->platform_profiler = platform_profiler;
     assert(platform_profiler->scope_begin);
+    assert(platform_profiler->scope_event);
     assert(platform_profiler->scope_end);
   }
 }
