@@ -10,13 +10,9 @@ const uint32_t k_max_name_len = 32u;
 const uint32_t k_max_tokens = 1024u;
 const uint32_t k_max_threads = 16u;
 
-#define FT_TIMER 0u
-#define FT_EVENT 1u
-#define FT_COUNTER 2u
-
 #define FT_TOKEN_PASTE(a, b) a ## b
 #define FT_TOKEN_PASTE_EX(a, b) FT_TOKEN_PASTE(a, b)
-#define FT_DEFINE(token, group, name, event) uint64_t ft_token_##token = ft_make_token(group, name)
+#define FT_DEFINE(token, group, name) uint64_t ft_token_##token = ft_make_token(group, name)
 #define FT_SCOPE_TOK(token) ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(ft_token_##token)
 #define FT_SCOPE(group, name) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
   ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(FT_TOKEN_PASTE_EX(s_token, __LINE__))
@@ -34,11 +30,17 @@ struct ft_profile_data_t {
   uint32_t num_threads;
 };
 
+struct ft_platform_profiler_t {
+  void (*scope_begin)(const char*, uint32_t);
+  void (*scope_end)();
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 extern void ft_init_profiler(uint32_t num_blocks);
+extern void ft_init_profiler_ex(uint32_t num_blocks, ft_platform_profiler_t* profiler);
 extern void ft_end_profiler();
 
 extern void ft_instrument_thread(const char* name);
@@ -75,8 +77,13 @@ struct ft_scope_t {
 
 #ifdef FT_PROFILER_IMPL
 
+#ifndef FT_PLATFORM_PROFILER
+# define FT_PLATFORM_PROFILER 0
+#endif
+
 #include <stdlib.h>
 #include <stdio.h>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <thread>
@@ -114,22 +121,24 @@ struct ft_profiler_t {
   ft_timeline_t timeline_pool[k_max_threads];
   uint32_t free_list[k_max_timeline_bitmasks];
 
+  ft_platform_profiler_t* platform_profiler;
   ft_profile_data_t profile_data;
+
   std::mutex lock;
 };
 
 thread_local ft_timeline_t* g_tls_timeline = nullptr;
 
-FT_DEFINE(flush_data_internal, "feather", "ft_flush_data", FT_TIMER);
-FT_DEFINE(flush_data_callback, "feather", "callback", FT_TIMER);
-FT_DEFINE(flush_data_event, "feather", "ft_flush_data", FT_EVENT);
-FT_DEFINE(memory_used, "feather", "memory_used", FT_EVENT);
+FT_DEFINE(flush_data_internal, "feather", "ft_flush_data");
+FT_DEFINE(flush_data_callback, "feather", "callback");
+FT_DEFINE(flush_data_event, "feather", "ft_flush_data");
+FT_DEFINE(memory_used, "feather", "memory_used");
 
-uint32_t platform_clz(const uint32_t mask) {
+uint32_t ft_platform_clz(const uint32_t mask) {
   return __builtin_ctz(mask);
 }
 
-uint64_t platform_tick() {
+uint64_t ft_platform_tick() {
   const auto ts = std::chrono::high_resolution_clock::now();
   return std::chrono::duration_cast<std::chrono::microseconds>(ts.time_since_epoch()).count();
 }
@@ -139,7 +148,7 @@ uint64_t ft_pack_token(const uint32_t token_index) {
 }
 
 void ft_util_meta_strcpy(const uint32_t index, char* dest, const char* name) {
-  const size_t str_len = std::strlen(name);
+  const uint32_t str_len = std::min<uint32_t>(k_max_name_len, std::strlen(name));
   std::memcpy(&dest[index * k_max_name_len], name, str_len);
   std::memset(&dest[index * k_max_name_len + str_len], '\0', 1u);
 }
@@ -180,7 +189,7 @@ bool ft_find_next_free_index(uint32_t& index) {
   for (uint32_t dword_index=0u; dword_index<k_max_timeline_bitmasks; ++dword_index) {
     uint32_t& bitmask = ft_profiler()->free_list[dword_index];
     if (bitmask > 0u) {
-      const uint32_t bit_index = platform_clz(bitmask);
+      const uint32_t bit_index = ft_platform_clz(bitmask);
       bitmask ^= 1u << bit_index;
       index = bit_index + dword_index * 32u;
       return true;
@@ -258,15 +267,28 @@ void ft_write_qword(ft_timeline_t* timeline, uint64_t data) {
 
 void ft_put_timestamp(uint32_t meta_index, uint8_t type) {
   ft_timeline_t* timeline = ft_get_thread_timeline();
-  const uint64_t ts = platform_tick();
+  const uint64_t ts = ft_platform_tick();
   ft_write_qword(timeline, ft_pack_timestamp(meta_index, ts, type));
 }
 
+bool ft_use_platform_profiler() {
+  return !!FT_PLATFORM_PROFILER && ft_profiler()->platform_profiler;
+}
+
 void ft_scope_begin(const uint64_t token) {
+  if (ft_use_platform_profiler()) {
+    const char* name = &ft_profiler()->tokens_meta.names[token * k_max_name_len];
+    return ft_profiler()->platform_profiler->scope_begin(name, 0xFFFFFF);
+  }
+
   ft_put_timestamp(token, 0u);
 }
 
 void ft_scope_end(const uint64_t token) {
+  if (ft_use_platform_profiler()) {
+    return ft_profiler()->platform_profiler->scope_end();
+  }
+
   ft_put_timestamp(token, 1u);
 }
 
@@ -297,9 +319,9 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
       const uint32_t k_num_read = k_max_timestamps - k_read_offset;
 
       ft_profiler()->profile_data.thread_data[thread_index] = (ft_profile_data_t::ft_thread_data_t) {
-        .buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address],
         .start = num_used > k_max_timestamps ? ((num_used + k_read_offset) % k_max_timestamps) : 0u,
         .count =  num_used > k_max_timestamps ? k_num_read : num_used,
+        .buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address],
       };
     }
   }
@@ -318,7 +340,7 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
   }
 }
 
-void ft_init_profiler(uint32_t num_blocks) {
+void ft_init_profiler_ex(uint32_t num_blocks, ft_platform_profiler_t* platform_profiler) {
   ft_profiler()->mem_arena = (uint8_t*)malloc(num_blocks * k_num_block_bytes);
 
   memset(ft_profiler()->free_list, 0xff, sizeof(ft_profiler()->free_list));
@@ -332,6 +354,16 @@ void ft_init_profiler(uint32_t num_blocks) {
   for (uint32_t i=0u; i<k_max_threads; i++) {
     ft_profiler()->timeline_pool[i].buffer_address = i * k_num_block_bytes;
   }
+
+  if (platform_profiler) {
+    ft_profiler()->platform_profiler = platform_profiler;
+    assert(platform_profiler->scope_begin);
+    assert(platform_profiler->scope_end);
+  }
+}
+
+void ft_init_profiler(uint32_t num_blocks) {
+  ft_init_profiler_ex(num_blocks, nullptr);
 }
 
 void ft_end_profiler() {
