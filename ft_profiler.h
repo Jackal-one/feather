@@ -8,6 +8,7 @@
 
 const uint32_t k_max_name_len = 32u;
 const uint32_t k_max_tokens = 1024u;
+const uint32_t k_max_groups = 32u;
 const uint32_t k_max_threads = 16u;
 
 #define FT_TOKEN_PASTE(a, b) a ## b
@@ -59,7 +60,7 @@ typedef void (*ft_callback)(const ft_profile_data_t* data, void* user_data);
 extern void ft_flush_data(ft_callback flush_data, void* user_data);
 
 extern void ft_data_read(const ft_profile_data_t* data, const uint32_t thread_index,
-  const uint32_t index, char** name, uint64_t* ts, uint8_t* type);
+  const uint32_t index, char** name, char** group, uint64_t* ts, uint8_t* type);
 
 #ifdef __cplusplus
 }
@@ -100,16 +101,18 @@ const uint32_t k_max_timeline_bitmasks = k_max_threads / sizeof(uint32_t);
 const uint32_t k_max_timestamps = k_num_block_bytes / sizeof(uint64_t);
 
 const uint32_t k_bits_type = 2u;
-const uint32_t k_bits_meta = 16u;
-const uint32_t k_bits_value = 46;
+const uint32_t k_bits_meta = 21u;
+const uint32_t k_bits_value = 41u;
 const uint64_t k_mask_type = (1ull << k_bits_type) - 1u;
 const uint64_t k_mask_meta = (1ull << k_bits_meta) - 1u;
 const uint64_t k_mask_value = (1ull << k_bits_value) - 1u;
 
 struct ft_token_meta_t {
   char names[k_max_tokens * k_max_name_len];
+  char groups[k_max_groups * k_max_name_len];
   char thread_names[k_max_threads * k_max_name_len];
   uint32_t used;
+  uint32_t num_groups;
 };
 
 struct ft_timeline_t {
@@ -148,10 +151,6 @@ uint64_t ft_platform_tick() {
   return std::chrono::duration_cast<std::chrono::microseconds>(ts.time_since_epoch()).count();
 }
 
-uint64_t ft_pack_token(const uint32_t token_index) {
-  return token_index;
-}
-
 void ft_util_meta_strcpy(const uint32_t index, char* dest, const char* name) {
   const uint32_t str_len = std::min<uint32_t>(k_max_name_len, std::strlen(name));
   std::memcpy(&dest[index * k_max_name_len], name, str_len);
@@ -163,31 +162,39 @@ ft_profiler_t* ft_profiler() {
   return &profiler_inst;
 }
 
-bool ft_find_token(uint64_t& token, const char* group, const char* name) {
+uint64_t ft_pack_token(const uint32_t name_index, const uint32_t group_index) {
+  return ((group_index & 0x1F) << 16u) | (name_index & 0xFFFF);
+}
+
+uint32_t ft_get_token_name(const char* name) {
   for (uint32_t i=0u; i<ft_profiler()->tokens_meta.used; i++) {
     if (std::strcmp(&ft_profiler()->tokens_meta.names[i * k_max_name_len], name) == 0) {
-      token = ft_pack_token(i);
-      return true;
+      return i;
     }
   }
 
-  return false;
-}
-
-uint64_t ft_push_token(const char* group, const char* name) {
   const uint32_t index = ft_profiler()->tokens_meta.used++;
   ft_util_meta_strcpy(index, ft_profiler()->tokens_meta.names, name);
-  return ft_pack_token(index);
+  return index;
+}
+
+uint32_t ft_get_token_group(const char* name) {
+  for (uint32_t i=0u; i<ft_profiler()->tokens_meta.num_groups; i++) {
+    if (std::strcmp(&ft_profiler()->tokens_meta.groups[i * k_max_name_len], name) == 0) {
+      return i;
+    }
+  }
+
+  const uint32_t index = ft_profiler()->tokens_meta.num_groups++;
+  ft_util_meta_strcpy(index, ft_profiler()->tokens_meta.groups, name);
+  return index;
 }
 
 uint64_t ft_make_token(const char* group, const char* name) {
   std::lock_guard<std::mutex> lock(ft_profiler()->lock);
-  uint64_t token = 0u;
-  if (!ft_find_token(token, group, name)) {
-    token = ft_push_token(group, name);
-  }
-
-  return token;
+  const uint32_t name_index = ft_get_token_name(name);
+  const uint32_t group_index = ft_get_token_group(group);
+  return ft_pack_token(name_index, group_index);
 }
 
 bool ft_find_next_free_index(uint32_t& index) {
@@ -307,14 +314,17 @@ void ft_scope_event(const uint64_t token) {
 }
 
 void ft_data_read(const ft_profile_data_t* data, const uint32_t thread_index,
-  const uint32_t index, char** name, uint64_t* ts, uint8_t* type) {
+  const uint32_t index, char** name, char** group, uint64_t* ts, uint8_t* type) {
   const uint32_t qword_index = (index + data->thread_data[thread_index].start) % k_max_timestamps;
   const uint64_t qword = data->thread_data[thread_index].buffer[qword_index];
-  const uint32_t meta_index = (qword >> k_bits_value) & k_mask_meta;
+  const uint32_t meta = (qword >> k_bits_value) & k_mask_meta;
+  const uint32_t name_index = meta & 0xFFFF;
+  const uint32_t group_index = (meta >> 16u) & 0x1F;
 
   *ts = (qword & k_mask_value);
   *type = (qword >> (k_bits_value + k_bits_meta)) & k_mask_type;
-  *name = &ft_profiler()->tokens_meta.names[meta_index * k_max_name_len];
+  *name = &ft_profiler()->tokens_meta.names[name_index * k_max_name_len];
+  *group = &ft_profiler()->tokens_meta.groups[group_index * k_max_name_len];
 }
 
 void ft_flush_data(ft_callback flush_data, void* user_data) {
