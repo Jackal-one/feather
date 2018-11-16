@@ -6,6 +6,7 @@
 #endif
 
 const uint32_t k_max_threads = 16u;
+const uint32_t k_max_name_len = 32u;
 
 struct ft_profile_data_t {
   struct ft_thread_data_t {
@@ -35,12 +36,15 @@ struct ft_platform_profiler_t {
 #define FT_EVENT(group, name)
 #define FT_SCOPE_TOK(token)
 #define FT_SCOPE(group, name)
+#define FT_COUNTER_TOK(token, value)
+#define FT_COUNTER(group, name, value)
 
 #define ft_init_profiler(...)
 #define ft_init_profiler_ex(...)
 #define ft_end_profiler()
 #define ft_flush_data(...)
 #define ft_data_read(...)
+#define ft_read_counter(...) 0
 
 #else // FT_PROFILER_ENABLED
 
@@ -53,6 +57,9 @@ struct ft_platform_profiler_t {
 #define FT_SCOPE_TOK(token) ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(ft_token_##token)
 #define FT_SCOPE(group, name) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
   ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(FT_TOKEN_PASTE_EX(s_token, __LINE__))
+#define FT_COUNTER_TOK(token, value) ft_scope_counter(ft_token_##token, value)
+#define FT_COUNTER(group, name, value) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
+  ft_scope_counter(ft_token_##token, value)
 
 #ifdef __cplusplus
 extern "C" {
@@ -69,12 +76,15 @@ extern uint64_t ft_make_token(const char* group, const char* name);
 extern void ft_scope_begin(const uint64_t token);
 extern void ft_scope_end(const uint64_t token);
 extern void ft_scope_event(const uint64_t token);
+extern void ft_scope_counter(const uint64_t token, const uint64_t value);
 
 typedef void (*ft_callback)(const ft_profile_data_t* data, void* user_data);
 extern void ft_flush_data(ft_callback flush_data, void* user_data);
 
 extern void ft_data_read(const ft_profile_data_t* data, const uint32_t thread_index,
   const uint32_t index, char** name, char** group, uint64_t* ts, uint8_t* type);
+extern uint64_t ft_read_counter(const ft_profile_data_t* data, const uint32_t thread_index,
+  const uint32_t index);
 
 #ifdef __cplusplus
 }
@@ -110,11 +120,10 @@ struct ft_scope_t {
 #include <atomic>
 #include <mutex>
 
-const uint32_t k_max_name_len = 32u;
 const uint32_t k_max_tokens = 1024u;
 const uint32_t k_max_groups = 32u;
 
-const uint32_t k_num_block_bytes = 32u * 1024u;
+const uint32_t k_num_block_bytes = 64u * 1024u;
 const uint32_t k_max_timeline_bitmasks = k_max_threads / sizeof(uint32_t);
 const uint32_t k_max_timestamps = k_num_block_bytes / sizeof(uint64_t);
 
@@ -157,7 +166,6 @@ thread_local ft_timeline_t* g_tls_timeline = nullptr;
 
 FT_DEFINE(flush_data_internal, "feather", "ft_flush_data");
 FT_DEFINE(flush_data_callback, "feather", "callback");
-FT_DEFINE(flush_data_event, "feather", "ft_flush_data");
 FT_DEFINE(memory_used, "feather", "memory_used");
 
 uint32_t ft_platform_clz(const uint32_t mask) {
@@ -282,23 +290,31 @@ ft_timeline_t* ft_get_thread_timeline() {
   return g_tls_timeline;
 }
 
+void ft_write_qword(ft_timeline_t* timeline, const uint64_t data) {
+  const uint32_t index = timeline->num_used;
+  uint64_t* buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address];
+  std::memcpy(&buffer[index % k_max_timestamps], &data, sizeof(uint64_t));
+  timeline->num_used.fetch_add(1u, std::memory_order_release);
+}
+
+void ft_write_qword2(ft_timeline_t* timeline, const uint64_t data0, const uint64_t data1) {
+  const uint32_t index = timeline->num_used;
+  uint64_t* buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address];
+  std::memcpy(&buffer[(index + 0u) % k_max_timestamps], &data0, sizeof(uint64_t));
+  std::memcpy(&buffer[(index + 1u) % k_max_timestamps], &data1, sizeof(uint64_t));
+  timeline->num_used.fetch_add(2u, std::memory_order_release);
+}
+
 uint64_t ft_pack_timestamp(uint32_t meta_index, uint64_t timestamp, uint8_t type) {
   return ((type & k_mask_type) << (k_bits_meta + k_bits_value)) | 
     ((meta_index & k_mask_meta) << k_bits_value) |
     (timestamp & k_mask_value);
 }
 
-void ft_write_qword(ft_timeline_t* timeline, uint64_t data) {
-  const uint32_t next = timeline->num_used % k_max_timestamps;
-  uint64_t* buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address];
-  std::memcpy(&buffer[next], &data, sizeof(uint64_t));
-  timeline->num_used.fetch_add(1u, std::memory_order_release);
-}
-
-void ft_put_timestamp(uint32_t meta_index, uint8_t type) {
-  ft_timeline_t* timeline = ft_get_thread_timeline();
+void ft_put_timestamp(ft_timeline_t* timeline, uint32_t token, uint8_t type) {
   const uint64_t ts = ft_platform_tick();
-  ft_write_qword(timeline, ft_pack_timestamp(meta_index, ts, type));
+  const uint64_t data = ft_pack_timestamp(token, ts, type);
+  ft_write_qword(timeline, data);
 }
 
 bool ft_use_platform_profiler() {
@@ -311,7 +327,7 @@ void ft_scope_begin(const uint64_t token) {
     return ft_profiler()->platform_profiler->scope_begin(name, token);
   }
 
-  ft_put_timestamp(token, 0u);
+  ft_put_timestamp(ft_get_thread_timeline(), token, 0u);
 }
 
 void ft_scope_end(const uint64_t token) {
@@ -319,7 +335,7 @@ void ft_scope_end(const uint64_t token) {
     return ft_profiler()->platform_profiler->scope_end();
   }
 
-  ft_put_timestamp(token, 1u);
+  ft_put_timestamp(ft_get_thread_timeline(), token, 1u);
 }
 
 void ft_scope_event(const uint64_t token) {
@@ -328,7 +344,12 @@ void ft_scope_event(const uint64_t token) {
     return ft_profiler()->platform_profiler->scope_event(name, token);
   }
 
-  ft_put_timestamp(token, 2u);  
+  ft_put_timestamp(ft_get_thread_timeline(), token, 2u);  
+}
+
+void ft_scope_counter(const uint64_t token, const uint64_t value) {
+  const uint64_t ts = ft_platform_tick();
+  ft_write_qword2(ft_get_thread_timeline(), ft_pack_timestamp(token, ts, 3u), value);
 }
 
 void ft_data_read(const ft_profile_data_t* data, const uint32_t thread_index,
@@ -345,6 +366,12 @@ void ft_data_read(const ft_profile_data_t* data, const uint32_t thread_index,
   *group = &ft_profiler()->tokens_meta.groups[group_index * k_max_name_len];
 }
 
+uint64_t ft_read_counter(const ft_profile_data_t* data, const uint32_t thread_index,
+  const uint32_t index) {
+  const uint32_t qword_index = (index + data->thread_data[thread_index].start) % k_max_timestamps;
+  return data->thread_data[thread_index].buffer[qword_index];
+}
+
 void ft_flush_data(ft_callback flush_data, void* user_data) {
   FT_SCOPE_TOK(flush_data_internal);
   std::lock_guard<std::mutex> lock(ft_profiler()->lock);
@@ -357,7 +384,7 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
       const uint32_t num_used = timeline->num_used.load(std::memory_order_acquire);
       const uint32_t thread_index = ft_profiler()->profile_data.num_threads++;
 
-      const uint32_t k_read_offset = k_max_timestamps / 5u;
+      const uint32_t k_read_offset = 3u;
       const uint32_t k_num_read = k_max_timestamps - k_read_offset;
 
       ft_profiler()->profile_data.thread_data[thread_index] = (ft_profile_data_t::ft_thread_data_t) {
