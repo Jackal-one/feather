@@ -1,25 +1,11 @@
 #pragma once
 #include <inttypes.h>
 
-// todo(mgiacal):
-// - redesign api?
-// - support counters.
-// - write workbench stress application for test/feature.
+#ifndef FT_PROFILER_ENABLED
+# define FT_PROFILER_ENABLED 0 
+#endif
 
-const uint32_t k_max_name_len = 32u;
-const uint32_t k_max_tokens = 1024u;
-const uint32_t k_max_groups = 32u;
 const uint32_t k_max_threads = 16u;
-
-#define FT_TOKEN_PASTE(a, b) a ## b
-#define FT_TOKEN_PASTE_EX(a, b) FT_TOKEN_PASTE(a, b)
-#define FT_DEFINE(token, group, name) uint64_t ft_token_##token = ft_make_token(group, name)
-#define FT_EVENT_TOK(token) ft_scope_event(ft_token_##token)
-#define FT_EVENT(group, name) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
-  ft_scope_event(FT_TOKEN_PASTE_EX(s_token, __LINE__))
-#define FT_SCOPE_TOK(token) ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(ft_token_##token)
-#define FT_SCOPE(group, name) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
-  ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(FT_TOKEN_PASTE_EX(s_token, __LINE__))
 
 struct ft_profile_data_t {
   struct ft_thread_data_t {
@@ -39,6 +25,34 @@ struct ft_platform_profiler_t {
   void (*scope_event)(const char*, uint32_t);
   void (*scope_end)();
 };
+
+#if (FT_PROFILER_ENABLED == 0)
+
+#define FT_TOKEN_PASTE(a, b)
+#define FT_TOKEN_PASTE_EX(a, b)
+#define FT_DEFINE(token, group, name)
+#define FT_EVENT_TOK(token)
+#define FT_EVENT(group, name)
+#define FT_SCOPE_TOK(token)
+#define FT_SCOPE(group, name)
+
+#define ft_init_profiler(...)
+#define ft_init_profiler_ex(...)
+#define ft_end_profiler()
+#define ft_flush_data(...)
+#define ft_data_read(...)
+
+#else // FT_PROFILER_ENABLED
+
+#define FT_TOKEN_PASTE(a, b) a ## b
+#define FT_TOKEN_PASTE_EX(a, b) FT_TOKEN_PASTE(a, b)
+#define FT_DEFINE(token, group, name) uint64_t ft_token_##token = ft_make_token(group, name)
+#define FT_EVENT_TOK(token) ft_scope_event(ft_token_##token)
+#define FT_EVENT(group, name) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
+  ft_scope_event(FT_TOKEN_PASTE_EX(s_token, __LINE__))
+#define FT_SCOPE_TOK(token) ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(ft_token_##token)
+#define FT_SCOPE(group, name) static uint64_t FT_TOKEN_PASTE_EX(s_token, __LINE__) = ft_make_token(group, name); \
+  ft_scope_t FT_TOKEN_PASTE_EX(scope, __LINE__)(FT_TOKEN_PASTE_EX(s_token, __LINE__))
 
 #ifdef __cplusplus
 extern "C" {
@@ -95,6 +109,10 @@ struct ft_scope_t {
 #include <thread>
 #include <atomic>
 #include <mutex>
+
+const uint32_t k_max_name_len = 32u;
+const uint32_t k_max_tokens = 1024u;
+const uint32_t k_max_groups = 32u;
 
 const uint32_t k_num_block_bytes = 32u * 1024u;
 const uint32_t k_max_timeline_bitmasks = k_max_threads / sizeof(uint32_t);
@@ -396,3 +414,4 @@ void ft_end_profiler() {
 }
 
 #endif // FT_PROFILER_IMPL
+#endif // FT_PROFILER_ENABLED
