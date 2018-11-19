@@ -65,8 +65,8 @@ struct ft_platform_profiler_t {
 extern "C" {
 #endif
 
-extern void ft_init_profiler(uint32_t num_blocks);
-extern void ft_init_profiler_ex(uint32_t num_blocks, ft_platform_profiler_t* profiler);
+extern void ft_init_profiler();
+extern void ft_init_profiler_ex(ft_platform_profiler_t* profiler);
 extern void ft_end_profiler();
 
 extern void ft_instrument_thread(const char* name);
@@ -409,12 +409,12 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
   }
 }
 
-void ft_init_profiler_ex(uint32_t num_blocks, ft_platform_profiler_t* platform_profiler) {
-  ft_profiler()->mem_arena = (uint8_t*)malloc(num_blocks * k_num_block_bytes);
+void ft_init_profiler_ex(ft_platform_profiler_t* platform_profiler) {
+  ft_profiler()->mem_arena = (uint8_t*)malloc(k_max_threads * k_num_block_bytes);
 
   memset(ft_profiler()->free_list, 0xff, sizeof(ft_profiler()->free_list));
   memset(ft_profiler()->timeline_pool, 0x0, sizeof(ft_profiler()->timeline_pool));
-  memset(ft_profiler()->mem_arena, 0x0, sizeof(num_blocks * k_num_block_bytes));
+  memset(ft_profiler()->mem_arena, 0x0, sizeof(k_max_threads * k_num_block_bytes));
 
   memset(&ft_profiler()->profile_data, 0x0, sizeof(ft_profiler()->profile_data));
   ft_profiler()->profile_data.thread_names = ft_profiler()->tokens_meta.thread_names;
@@ -432,8 +432,8 @@ void ft_init_profiler_ex(uint32_t num_blocks, ft_platform_profiler_t* platform_p
   }
 }
 
-void ft_init_profiler(uint32_t num_blocks) {
-  ft_init_profiler_ex(num_blocks, nullptr);
+void ft_init_profiler() {
+  ft_init_profiler_ex(nullptr);
 }
 
 void ft_end_profiler() {
