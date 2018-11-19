@@ -138,8 +138,8 @@ struct ft_token_meta_t {
   char names[k_max_tokens * k_max_name_len];
   char groups[k_max_groups * k_max_name_len];
   char thread_names[k_max_threads * k_max_name_len];
-  uint32_t used;
-  uint32_t num_groups;
+  uint32_t used = 1u;
+  uint32_t num_groups = 1u;
 };
 
 struct ft_timeline_t {
@@ -200,8 +200,12 @@ uint32_t ft_get_token_name(const char* name) {
   }
 
   const uint32_t index = ft_profiler()->tokens_meta.used++;
-  ft_util_meta_strcpy(index, ft_profiler()->tokens_meta.names, name);
-  return index;
+  if (index <= k_max_tokens) {
+    ft_util_meta_strcpy(index, ft_profiler()->tokens_meta.names, name);
+    return index;
+  }
+
+  return 0u;
 }
 
 uint32_t ft_get_token_group(const char* name) {
@@ -212,8 +216,12 @@ uint32_t ft_get_token_group(const char* name) {
   }
 
   const uint32_t index = ft_profiler()->tokens_meta.num_groups++;
-  ft_util_meta_strcpy(index, ft_profiler()->tokens_meta.groups, name);
-  return index;
+  if (index <= k_max_groups) {
+    ft_util_meta_strcpy(index, ft_profiler()->tokens_meta.groups, name);
+    return index;
+  }
+
+  return 0u;
 }
 
 uint64_t ft_make_token(const char* group, const char* name) {
@@ -284,7 +292,7 @@ void ft_end_instrument_thread() {
 
 ft_timeline_t* ft_get_thread_timeline() {
   if (!g_tls_timeline) {
-    ft_instrument_thread("unknown");
+    ft_instrument_thread("<unknown>");
   }
 
   return g_tls_timeline;
@@ -423,6 +431,9 @@ void ft_init_profiler_ex(ft_platform_profiler_t* platform_profiler) {
   for (uint32_t i=0u; i<k_max_threads; i++) {
     ft_profiler()->timeline_pool[i].buffer_address = i * k_num_block_bytes;
   }
+
+  ft_util_meta_strcpy(0u, ft_profiler()->tokens_meta.names, "<unknown>");
+  ft_util_meta_strcpy(0u, ft_profiler()->tokens_meta.groups, "<unknown>");
 
   if (platform_profiler) {
     ft_profiler()->platform_profiler = platform_profiler;
