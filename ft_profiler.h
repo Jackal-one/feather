@@ -144,6 +144,7 @@ struct ft_token_meta_t {
 
 struct ft_timeline_t {
   std::atomic<uint32_t> num_used;
+  std::atomic<uint32_t> read_index;
   uint32_t buffer_address;
   size_t thread_hash;
   uint8_t flags_release : 1u;
@@ -386,19 +387,22 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
   ft_profiler()->profile_data.num_threads = 0u;
 
   for (uint32_t i=0u; i<k_max_threads; ++i) {
-    const ft_timeline_t* timeline = &ft_profiler()->timeline_pool[i];
+    ft_timeline_t* timeline = &ft_profiler()->timeline_pool[i];
 
     if (timeline->thread_hash > 0u) {
-      const uint32_t num_used = timeline->num_used.load(std::memory_order_acquire);
+      const uint32_t write_index = timeline->num_used.load(std::memory_order_acquire);
+      const uint32_t read_index = timeline->read_index.load(std::memory_order_acquire);
       const uint32_t thread_index = ft_profiler()->profile_data.num_threads++;
 
-      const uint32_t k_read_offset = 3u;
-      const uint32_t k_num_read = k_max_timestamps - k_read_offset;
+      const uint32_t start = ((write_index - read_index) > k_max_timestamps ? (write_index + 1u) : read_index) % k_max_timestamps;
+      const uint32_t count = std::min<uint32_t>(write_index - read_index, k_max_timestamps) - 1u;
+      timeline->read_index.store((start + count) % k_max_timestamps, std::memory_order_release);
 
+      uint64_t* buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address];
       ft_profiler()->profile_data.thread_data[thread_index] = (ft_profile_data_t::ft_thread_data_t) {
-        .start = num_used > k_max_timestamps ? ((num_used + k_read_offset) % k_max_timestamps) : 0u,
-        .count =  num_used > k_max_timestamps ? k_num_read : num_used,
-        .buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address],
+        .start = start,
+        .count = count,
+        .buffer = buffer,
       };
     }
   }
