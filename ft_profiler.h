@@ -165,9 +165,9 @@ struct ft_profiler_t {
 
 thread_local ft_timeline_t* g_tls_timeline = nullptr;
 
-FT_DEFINE(flush_data_internal, "feather", "ft_flush_data");
-FT_DEFINE(flush_data_callback, "feather", "callback");
-FT_DEFINE(memory_used, "feather", "memory_used");
+FT_DEFINE(flush_data, "feather", "ft_flush_data");
+FT_DEFINE(flush_data_callback, "feather", "ft_flush_data_callback");
+FT_DEFINE(memory_used, "feather", "ft_memory_used");
 
 uint32_t ft_platform_clz(const uint32_t mask) {
   return __builtin_ctz(mask);
@@ -382,7 +382,6 @@ uint64_t ft_read_counter(const ft_profile_data_t* data, const uint32_t thread_in
 }
 
 void ft_flush_data(ft_callback flush_data, void* user_data) {
-  FT_SCOPE_TOK(flush_data_internal);
   std::lock_guard<std::mutex> lock(ft_profiler()->lock);
   ft_profiler()->profile_data.num_threads = 0u;
 
@@ -392,25 +391,18 @@ void ft_flush_data(ft_callback flush_data, void* user_data) {
     if (timeline->thread_hash > 0u) {
       const uint32_t write_index = timeline->num_used.load(std::memory_order_acquire);
       const uint32_t read_index = timeline->read_index.load(std::memory_order_acquire);
+      timeline->read_index.store(write_index, std::memory_order_release);
+
       const uint32_t thread_index = ft_profiler()->profile_data.num_threads++;
-
-      const uint32_t start = ((write_index - read_index) > k_max_timestamps ? (write_index + 1u) : read_index) % k_max_timestamps;
-      const uint32_t count = std::min<uint32_t>(write_index - read_index, k_max_timestamps) - 1u;
-      timeline->read_index.store((start + count) % k_max_timestamps, std::memory_order_release);
-
-      uint64_t* buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address];
       ft_profiler()->profile_data.thread_data[thread_index] = (ft_profile_data_t::ft_thread_data_t) {
-        .start = start,
-        .count = count,
-        .buffer = buffer,
+        .start = ((write_index - read_index) < k_max_timestamps ? read_index : write_index) % k_max_timestamps,
+        .count = std::min<uint32_t>(write_index - read_index, k_max_timestamps),
+        .buffer = (uint64_t*)&ft_profiler()->mem_arena[timeline->buffer_address],
       };
     }
   }
 
-  {
-    FT_SCOPE_TOK(flush_data_callback);
-    flush_data(&ft_profiler()->profile_data, user_data);
-  }
+  flush_data(&ft_profiler()->profile_data, user_data);
 
   for (uint32_t i=0u; i<k_max_threads; ++i) {
     ft_timeline_t* timeline = &ft_profiler()->timeline_pool[i];
